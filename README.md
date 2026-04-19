@@ -57,17 +57,12 @@ To change scopes, edit `HARDCODED_SCOPES` in `src/scopes.ts` and re-authenticate
 
 ## Setup
 
-### 1. Google Cloud Project
+### 1. Get OAuth Credentials
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or select an existing one)
-3. Enable the **Gmail API**
-4. Go to **APIs & Services > Credentials**
-5. Click **Create Credentials > OAuth client ID**
-6. Choose **Desktop app**, give it a name, click **Create**
-7. Download the JSON file and rename it to `gcp-oauth.keys.json`
+You need a `gcp-oauth.keys.json` file. Either:
 
-> If your app is in "Testing" mode, add authorized test users under **OAuth consent screen > Audience > Test users**.
+- **Create your own Google Cloud project** (see [Google Cloud setup](#google-cloud-project-setup) below), or
+- **Get the file from someone who already has a project** (they just need to add your Google account as a test user in their OAuth consent screen)
 
 ### 2. Install and Authenticate
 
@@ -76,15 +71,15 @@ git clone https://github.com/zenrith-fluxman/gmail-mcp-server.git
 cd gmail-mcp-server
 npm install && npm run build
 
-# Place your OAuth keys
+# Place your OAuth keys (create the directory if needed)
 mkdir -p ~/.gmail-mcp
-mv /path/to/gcp-oauth.keys.json ~/.gmail-mcp/
+cp /path/to/gcp-oauth.keys.json ~/.gmail-mcp/
 
-# Authenticate (opens browser)
+# Authenticate (opens browser, log in with your Google account)
 node dist/index.js auth
 ```
 
-Credentials are saved to `~/.gmail-mcp/credentials.json`.
+Credentials are saved to `~/.gmail-mcp/credentials.json`. Each user gets their own credentials file -- the OAuth keys file is shared, but your tokens are yours.
 
 ### 3. Configure Your MCP Client
 
@@ -187,6 +182,20 @@ node dist/index.js auth
 - **"invalid_grant" error** -- token expired. Delete `~/.gmail-mcp/credentials.json` and re-authenticate.
 - **Port 3000 in use** -- free the port before running auth (`lsof -i :3000`)
 - **"Not a test user" error** -- add the Google account under OAuth consent screen > Audience > Test users
+
+## Google Cloud Project Setup
+
+If you need to create your own OAuth credentials:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select an existing one)
+3. Enable the **Gmail API**
+4. Go to **APIs & Services > Credentials**
+5. Click **Create Credentials > OAuth client ID**
+6. Choose **Desktop app**, give it a name, click **Create**
+7. Download the JSON file and rename it to `gcp-oauth.keys.json`
+
+If your app is in "Testing" mode (the default), add authorized users under **OAuth consent screen > Audience > Test users**.
 
 ## License
 
