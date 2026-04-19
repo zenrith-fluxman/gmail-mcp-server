@@ -27,8 +27,17 @@ export const SCOPE_REVERSE_MAP: Record<string, string> = Object.fromEntries(
   Object.entries(SCOPE_MAP).map(([short, full]) => [full, short])
 );
 
-// Default scopes (original behavior)
-export const DEFAULT_SCOPES = ["gmail.modify", "gmail.settings.basic"];
+// ============================================================
+// HARDCODED SCOPES — change this to control what the server
+// can request. CLI --scopes flag is IGNORED when this is set.
+// Only gmail.modify is needed for read + archive + label.
+// DO NOT add gmail.settings.basic (enables auto-forwarding).
+// DO NOT add gmail.send or gmail.compose (enables sending).
+// ============================================================
+const HARDCODED_SCOPES = ["gmail.modify"];
+
+// Default scopes — overridden by HARDCODED_SCOPES
+export const DEFAULT_SCOPES = HARDCODED_SCOPES;
 
 // Convert shorthand scope name to full Google API URL
 // e.g., "gmail.readonly" -> "https://www.googleapis.com/auth/gmail.readonly"

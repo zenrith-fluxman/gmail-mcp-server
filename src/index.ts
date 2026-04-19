@@ -14,12 +14,13 @@ import { fileURLToPath } from 'url';
 import http from 'http';
 import open from 'open';
 import os from 'os';
+import crypto from 'crypto';
 import {createEmailMessage, createEmailWithNodemailer} from "./utl.js";
 import { createLabel, updateLabel, deleteLabel, listLabels, findLabelByName, getOrCreateLabel, GmailLabel } from "./label-manager.js";
 import { createFilter, listFilters, getFilter, deleteFilter, filterTemplates, GmailFilterCriteria, GmailFilterAction } from "./filter-manager.js";
 import { parseEmailAddresses, filterOutEmail, addRePrefix, buildReferencesHeader, buildReplyAllRecipients } from "./reply-all-helpers.js";
 import { DEFAULT_SCOPES, scopeNamesToUrls, parseScopes, validateScopes, hasScope, getAvailableScopeNames } from "./scopes.js";
-import { toolDefinitions, toMcpTools, getToolByName, SendEmailSchema, ReadEmailSchema, SearchEmailsSchema, ModifyEmailSchema, DeleteEmailSchema, BatchModifyEmailsSchema, BatchDeleteEmailsSchema, CreateLabelSchema, UpdateLabelSchema, DeleteLabelSchema, GetOrCreateLabelSchema, CreateFilterSchema, GetFilterSchema, DeleteFilterSchema, CreateFilterFromTemplateSchema, DownloadAttachmentSchema, ReplyAllSchema, GetThreadSchema, ListInboxThreadsSchema, GetInboxWithThreadsSchema } from "./tools.js";
+import { toolDefinitions, toMcpTools, getToolByName, SendEmailSchema, SearchEmailsSchema, ModifyEmailSchema, DeleteEmailSchema, BatchModifyEmailsSchema, BatchDeleteEmailsSchema, ArchiveEmailsSchema, BulkReadEmailsSchema, CreateLabelSchema, UpdateLabelSchema, DeleteLabelSchema, GetOrCreateLabelSchema, CreateFilterSchema, GetFilterSchema, DeleteFilterSchema, CreateFilterFromTemplateSchema, DownloadAttachmentSchema, ReplyAllSchema, GetThreadSchema, ListInboxThreadsSchema, GetInboxWithThreadsSchema } from "./tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +56,21 @@ interface EmailAttachment {
 interface EmailContent {
     text: string;
     html: string;
+}
+
+/**
+ * Wrap untrusted email content in random boundary markers to prevent prompt injection.
+ * The boundary is a random hex string that gets stripped from the content if it appears,
+ * making it impossible for email content to fake the closing marker.
+ */
+function wrapUntrusted(content: string): string {
+    const boundary = crypto.randomUUID().replace(/-/g, '');
+    const sanitized = content.split(boundary).join('');
+    return (
+        `--- UNTRUSTED EMAIL CONTENT [${boundary}] ---\n` +
+        `${sanitized}\n` +
+        `--- END UNTRUSTED EMAIL CONTENT [${boundary}] ---`
+    );
 }
 
 // OAuth2 configuration
@@ -220,28 +236,10 @@ async function main() {
     await loadCredentials();
 
     if (process.argv[2] === 'auth') {
-        // Parse --scopes flag from CLI arguments
-        // Usage: node dist/index.js auth --scopes=<scope1,scope2,...>
-        // Example: node dist/index.js auth --scopes=gmail.readonly
-        // Example: node dist/index.js auth --scopes=gmail.readonly,gmail.settings.basic
-        const scopesArg = process.argv.find(arg => arg.startsWith('--scopes='));
-        let scopes = DEFAULT_SCOPES;
-
-        if (scopesArg) {
-            const scopesValue = scopesArg.slice('--scopes='.length);
-            scopes = parseScopes(scopesValue);
-            const validation = validateScopes(scopes);
-
-            if (!validation.valid) {
-                console.error('Error: Invalid scope(s):', validation.invalid.join(', '));
-                console.error('Available scopes:', getAvailableScopeNames().join(', '));
-                process.exit(1);
-            }
-        } else {
-            console.log('No --scopes flag specified, using defaults:', DEFAULT_SCOPES.join(', '));
-            console.log('Tip: Use --scopes=gmail.readonly for read-only access');
-            console.log('Available scopes:', getAvailableScopeNames().join(', '));
-        }
+        // Scopes are hardcoded in scopes.ts for safety. CLI --scopes flag is ignored.
+        // To change scopes, edit HARDCODED_SCOPES in scopes.ts and rebuild.
+        const scopes = DEFAULT_SCOPES;
+        console.log('Using hardcoded scopes:', scopes.join(', '));
 
         await authenticate(scopes);
         console.log('Authentication completed successfully');
@@ -493,69 +491,45 @@ async function main() {
                     return await handleEmailAction(action, validatedArgs);
                 }
 
-                case "read_email": {
-                    const validatedArgs = ReadEmailSchema.parse(args);
-                    const response = await gmail.users.messages.get({
-                        userId: 'me',
-                        id: validatedArgs.messageId,
-                        format: 'full',
-                    });
+                case "bulk_read_emails": {
+                    const validatedArgs = BulkReadEmailsSchema.parse(args);
+                    const results: string[] = [];
 
-                    const headers = response.data.payload?.headers || [];
-                    const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
-                    const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value || '';
-                    const to = headers.find(h => h.name?.toLowerCase() === 'to')?.value || '';
-                    const date = headers.find(h => h.name?.toLowerCase() === 'date')?.value || '';
-                    const rfcMessageId = headers.find(h => h.name?.toLowerCase() === 'message-id')?.value || '';
-                    const threadId = response.data.threadId || '';
-
-                    // Extract email content using the recursive function
-                    const { text, html } = extractEmailContent(response.data.payload as GmailMessagePart || {});
-
-                    // Use plain text content if available, otherwise use HTML content
-                    // (optionally, you could implement HTML-to-text conversion here)
-                    let body = text || html || '';
-
-                    // If we only have HTML content, add a note for the user
-                    const contentTypeNote = !text && html ?
-                        '[Note: This email is HTML-formatted. Plain text version not available.]\n\n' : '';
-
-                    // Get attachment information
-                    const attachments: EmailAttachment[] = [];
-                    const processAttachmentParts = (part: GmailMessagePart, path: string = '') => {
-                        if (part.body && part.body.attachmentId) {
-                            const filename = part.filename || `attachment-${part.body.attachmentId}`;
-                            attachments.push({
-                                id: part.body.attachmentId,
-                                filename: filename,
-                                mimeType: part.mimeType || 'application/octet-stream',
-                                size: part.body.size || 0
+                    for (const msgId of validatedArgs.messageIds) {
+                        try {
+                            const resp = await gmail.users.messages.get({
+                                userId: 'me',
+                                id: msgId,
+                                format: 'full',
                             });
-                        }
+                            const hdrs = resp.data.payload?.headers || [];
+                            const subj = hdrs.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
+                            const frm = hdrs.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+                            const to = hdrs.find(h => h.name?.toLowerCase() === 'to')?.value || '';
+                            const dt = hdrs.find(h => h.name?.toLowerCase() === 'date')?.value || '';
+                            const { text, html } = extractEmailContent(resp.data.payload as GmailMessagePart || {});
+                            let body = text || html || '';
+                            // Full body — no truncation
+                            const contentNote = !text && html ? '[HTML only] ' : '';
 
-                        if (part.parts) {
-                            part.parts.forEach((subpart: GmailMessagePart) =>
-                                processAttachmentParts(subpart, `${path}/parts`)
-                            );
-                        }
-                    };
+                            // Get attachments
+                            const atts: string[] = [];
+                            const findAtts = (part: GmailMessagePart) => {
+                                if (part.body?.attachmentId) {
+                                    atts.push(`${part.filename || 'unnamed'} (${part.mimeType}, ${Math.round((part.body.size || 0)/1024)}KB, ID: ${part.body.attachmentId})`);
+                                }
+                                if (part.parts) part.parts.forEach(p => findAtts(p));
+                            };
+                            if (resp.data.payload) findAtts(resp.data.payload as GmailMessagePart);
 
-                    if (response.data.payload) {
-                        processAttachmentParts(response.data.payload as GmailMessagePart);
+                            results.push(`=== ${msgId} ===\nFrom: ${frm}\nTo: ${to}\nDate: ${dt}\nSubject: ${subj}\n${contentNote}${body}${atts.length > 0 ? '\nAttachments: ' + atts.join(', ') : ''}\n`);
+                        } catch (error: any) {
+                            results.push(`=== ${msgId} ===\nError: ${error.message}\n`);
+                        }
                     }
 
-                    // Add attachment info to output if any are present
-                    const attachmentInfo = attachments.length > 0 ?
-                        `\n\nAttachments (${attachments.length}):\n` +
-                        attachments.map(a => `- ${a.filename} (${a.mimeType}, ${Math.round(a.size/1024)} KB, ID: ${a.id})`).join('\n') : '';
-
                     return {
-                        content: [
-                            {
-                                type: "text",
-                                text: `Thread ID: ${threadId}\nMessage-ID: ${rfcMessageId}\nSubject: ${subject}\nFrom: ${from}\nTo: ${to}\nDate: ${date}\n\n${contentTypeNote}${body}${attachmentInfo}`,
-                            },
-                        ],
+                        content: [{ type: "text", text: wrapUntrusted(results.join('\n')) }],
                     };
                 }
 
@@ -574,13 +548,14 @@ async function main() {
                                 userId: 'me',
                                 id: msg.id!,
                                 format: 'metadata',
-                                metadataHeaders: ['Subject', 'From', 'Date'],
+                                metadataHeaders: ['Subject', 'From', 'To', 'Date'],
                             });
                             const headers = detail.data.payload?.headers || [];
                             return {
                                 id: msg.id,
                                 subject: headers.find(h => h.name === 'Subject')?.value || '',
                                 from: headers.find(h => h.name === 'From')?.value || '',
+                                to: headers.find(h => h.name === 'To')?.value || '',
                                 date: headers.find(h => h.name === 'Date')?.value || '',
                             };
                         })
@@ -590,9 +565,9 @@ async function main() {
                         content: [
                             {
                                 type: "text",
-                                text: results.map(r =>
-                                    `ID: ${r.id}\nSubject: ${r.subject}\nFrom: ${r.from}\nDate: ${r.date}\n`
-                                ).join('\n'),
+                                text: wrapUntrusted(results.map(r =>
+                                    `ID: ${r.id}\nSubject: ${r.subject}\nFrom: ${r.from}\nTo: ${r.to}\nDate: ${r.date}\n`
+                                ).join('\n')),
                             },
                         ],
                     };
@@ -724,6 +699,50 @@ async function main() {
                                 text: resultText,
                             },
                         ],
+                    };
+                }
+
+                case "archive_emails": {
+                    const validatedArgs = ArchiveEmailsSchema.parse(args);
+                    const archiveIds = validatedArgs.messageIds;
+                    const BATCH_SIZE = 20;
+                    const archiveResults: Array<{messageId: string, success: boolean, error?: string}> = [];
+
+                    for (let i = 0; i < archiveIds.length; i += BATCH_SIZE) {
+                        const batch = archiveIds.slice(i, i + BATCH_SIZE);
+                        const batchResults = await Promise.all(
+                            batch.map(async (messageId) => {
+                                try {
+                                    await gmail.users.messages.modify({
+                                        userId: 'me',
+                                        id: messageId,
+                                        requestBody: {
+                                            removeLabelIds: ['INBOX'],
+                                            ...(validatedArgs.addLabelId && { addLabelIds: [validatedArgs.addLabelId] }),
+                                        },
+                                    });
+                                    return { messageId, success: true };
+                                } catch (error: any) {
+                                    return { messageId, success: false, error: error.message };
+                                }
+                            })
+                        );
+                        archiveResults.push(...batchResults);
+                        if (i + BATCH_SIZE < archiveIds.length) {
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                        }
+                    }
+
+                    const archived = archiveResults.filter(r => r.success).length;
+                    const archiveFailed = archiveResults.filter(r => !r.success);
+                    let archiveText = `Archived ${archived} emails.\n`;
+                    if (archiveFailed.length > 0) {
+                        archiveText += `Failed: ${archiveFailed.length}\n`;
+                        archiveText += archiveFailed.map(f => `- ${f.messageId}: ${f.error}`).join('\n');
+                    }
+
+                    return {
+                        content: [{ type: "text", text: archiveText }],
                     };
                 }
 
@@ -1150,11 +1169,11 @@ async function main() {
                         content: [
                             {
                                 type: "text",
-                                text: JSON.stringify({
+                                text: wrapUntrusted(JSON.stringify({
                                     threadId: validatedArgs.threadId,
                                     messageCount: messagesOutput.length,
                                     messages: messagesOutput,
-                                }, null, 2),
+                                }, null, 2)),
                             },
                         ],
                     };
@@ -1202,10 +1221,10 @@ async function main() {
                         content: [
                             {
                                 type: "text",
-                                text: JSON.stringify({
+                                text: wrapUntrusted(JSON.stringify({
                                     resultCount: threadDetails.length,
                                     threads: threadDetails,
-                                }, null, 2),
+                                }, null, 2)),
                             },
                         ],
                     };
@@ -1337,10 +1356,10 @@ async function main() {
                         content: [
                             {
                                 type: "text",
-                                text: JSON.stringify({
+                                text: wrapUntrusted(JSON.stringify({
                                     resultCount: expandedThreads.length,
                                     threads: expandedThreads,
-                                }, null, 2),
+                                }, null, 2)),
                             },
                         ],
                     };
