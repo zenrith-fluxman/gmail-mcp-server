@@ -7,7 +7,7 @@
  * 3. No References/In-Reply-To headers on new emails
  * 4. Source verification: createEmailWithNodemailer uses references field
  * 5. Source verification: handleEmailAction auto-resolves threading headers
- * 6. Source verification: read_email returns Message-ID
+ * 6. Source verification: bulk_read_emails wraps content as untrusted
  */
 
 import { describe, it, expect } from 'vitest';
@@ -83,10 +83,9 @@ describe('Source verification', () => {
         expect(source).toContain("validatedArgs.references = allMessageIds.join(' ')");
     });
 
-    it('read_email returns Message-ID', () => {
+    it('bulk_read_emails wraps content as untrusted', () => {
         const source = fs.readFileSync(path.join(srcDir, 'index.ts'), 'utf-8');
-        expect(source).toContain('message-id');
-        expect(source).toContain('rfcMessageId');
-        expect(source).toContain('Message-ID: ${rfcMessageId}');
+        expect(source).toContain('wrapUntrusted');
+        expect(source).toContain('UNTRUSTED EMAIL CONTENT');
     });
 });
