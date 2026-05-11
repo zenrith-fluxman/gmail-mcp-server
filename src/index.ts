@@ -15,7 +15,7 @@ import http from 'http';
 import open from 'open';
 import os from 'os';
 import crypto from 'crypto';
-import {createEmailMessage, createEmailWithNodemailer} from "./utl.js";
+import {createEmailMessage, createEmailWithNodemailer, htmlToPlaintext, pickBestBody} from "./utl.js";
 import { createLabel, updateLabel, deleteLabel, listLabels, findLabelByName, getOrCreateLabel, GmailLabel } from "./label-manager.js";
 import { createFilter, listFilters, getFilter, deleteFilter, filterTemplates, GmailFilterCriteria, GmailFilterAction } from "./filter-manager.js";
 import { parseEmailAddresses, filterOutEmail, addRePrefix, buildReferencesHeader, buildReplyAllRecipients } from "./reply-all-helpers.js";
@@ -72,6 +72,11 @@ function wrapUntrusted(content: string): string {
         `--- END UNTRUSTED EMAIL CONTENT [${boundary}] ---`
     );
 }
+
+// Hard cap on per-email body length returned to the caller.
+// HTML→plaintext typically shrinks receipts to <2KB; this only kicks in for
+// long newsletters / digests. Keeps bulk reads from blowing context.
+const MAX_BODY_CHARS = 20000;
 
 // OAuth2 configuration
 let oauth2Client: OAuth2Client;
@@ -508,9 +513,11 @@ async function main() {
                             const to = hdrs.find(h => h.name?.toLowerCase() === 'to')?.value || '';
                             const dt = hdrs.find(h => h.name?.toLowerCase() === 'date')?.value || '';
                             const { text, html } = extractEmailContent(resp.data.payload as GmailMessagePart || {});
-                            let body = text || html || '';
-                            // Full body — no truncation
-                            const contentNote = !text && html ? '[HTML only] ' : '';
+                            let { body, source } = pickBestBody(text, html);
+                            const contentNote = source === 'html' ? '[HTML→text] ' : '';
+                            if (body.length > MAX_BODY_CHARS) {
+                                body = body.slice(0, MAX_BODY_CHARS) + `\n\n[truncated — body was ${body.length} chars, capped at ${MAX_BODY_CHARS}]`;
+                            }
 
                             // Get attachments
                             const atts: string[] = [];
@@ -1123,7 +1130,7 @@ async function main() {
                         let body = '';
                         if (validatedArgs.format !== 'minimal') {
                             const { text, html } = extractEmailContent(msg.payload as GmailMessagePart || {});
-                            body = text || html || '';
+                            body = pickBestBody(text, html).body;
                         }
 
                         // Extract attachment metadata
@@ -1303,7 +1310,7 @@ async function main() {
                                 const date = headers.find(h => h.name?.toLowerCase() === 'date')?.value || '';
 
                                 const { text, html } = extractEmailContent(msg.payload as GmailMessagePart || {});
-                                const body = text || html || '';
+                                const body = pickBestBody(text, html).body;
 
                                 // Extract attachment metadata
                                 const attachments: EmailAttachment[] = [];

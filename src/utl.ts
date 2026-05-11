@@ -22,6 +22,55 @@ export const validateEmail = (email: string): boolean => {
 };
 
 /**
+ * Convert HTML to readable plaintext for LLM consumption.
+ * Drops <script>/<style> entirely, turns block-level closers into newlines,
+ * strips remaining tags, decodes common entities, collapses whitespace.
+ * Not a full parser — good enough for transactional emails (receipts, invoices).
+ */
+export function htmlToPlaintext(html: string): string {
+    let s = html;
+    s = s.replace(/<(script|style|head)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+    s = s.replace(/<!--[\s\S]*?-->/g, '');
+    s = s.replace(/<\s*br\s*\/?>/gi, '\n');
+    s = s.replace(/<\/(p|div|tr|li|h[1-6]|table)\s*>/gi, '\n');
+    s = s.replace(/<[^>]+>/g, '');
+    s = s
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'")
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+        .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+    s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    s = s.replace(/[ \t]+/g, ' ');
+    s = s.replace(/\n[ \t]+/g, '\n');
+    s = s.replace(/[ \t]+\n/g, '\n');
+    s = s.replace(/\n{3,}/g, '\n\n');
+    return s.trim();
+}
+
+/**
+ * Pick the most complete body rendering from a multipart email.
+ *
+ * Senders often ship BOTH text/plain and text/html alternatives, and the
+ * text/plain version is frequently a degraded auto-generated copy that drops
+ * content (Supabase quota emails drop the "Reduce egress bandwidth below
+ * 5.5 GB" bullet from text/plain — it lives only in text/html).
+ *
+ * Strategy: when HTML is present, render it to plaintext and return that.
+ * The HTML version is the canonical content the sender designed. Only fall
+ * back to text/plain when there's no HTML at all.
+ */
+export function pickBestBody(text: string, html: string): { body: string; source: 'text' | 'html' | 'none' } {
+    if (html) return { body: htmlToPlaintext(html), source: 'html' };
+    if (text) return { body: text, source: 'text' };
+    return { body: '', source: 'none' };
+}
+
+/**
  * Sanitize a value destined for an email header to prevent CRLF injection.
  * Strips \r, \n, and \0 characters that could inject additional headers.
  */
