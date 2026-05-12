@@ -172,7 +172,7 @@ export interface ToolDefinition {
 // ============================================================
 const ENABLE_SEND_EMAIL = false;        // send_email, reply_all
 const ENABLE_DELETE_EMAIL = false;       // delete_email, batch_delete_emails (PERMANENT deletion, no undo!)
-const ENABLE_FILTER_CREATION = false;   // create_filter, create_filter_from_template (can set up auto-forwarding)
+const ENABLE_FILTER_CREATION = true;    // create_filter, create_filter_from_template — auto-forwarding rules are still off-limits by policy
 
 const DISABLED_TOOLS = new Set<string>();
 if (!ENABLE_SEND_EMAIL) { DISABLED_TOOLS.add("send_email"); DISABLED_TOOLS.add("reply_all"); }

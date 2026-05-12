@@ -30,11 +30,14 @@ export const SCOPE_REVERSE_MAP: Record<string, string> = Object.fromEntries(
 // ============================================================
 // HARDCODED SCOPES — change this to control what the server
 // can request. CLI --scopes flag is IGNORED when this is set.
-// Only gmail.modify is needed for read + archive + label.
-// DO NOT add gmail.settings.basic (enables auto-forwarding).
+// gmail.modify: read + archive + label.
+// gmail.settings.basic: filter management. WARNING — this same
+//   scope ALSO grants auto-forwarding, vacation responder, and
+//   IMAP/POP toggling. Google does not split it. Filter tools
+//   are OK; never use this MCP to create forwarding rules.
 // DO NOT add gmail.send or gmail.compose (enables sending).
 // ============================================================
-const HARDCODED_SCOPES = ["gmail.modify"];
+const HARDCODED_SCOPES = ["gmail.modify", "gmail.settings.basic"];
 
 // Default scopes — overridden by HARDCODED_SCOPES
 export const DEFAULT_SCOPES = HARDCODED_SCOPES;
