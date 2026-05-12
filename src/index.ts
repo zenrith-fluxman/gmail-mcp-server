@@ -152,7 +152,8 @@ async function loadCredentials() {
         const callbackArg = process.argv.find(arg =>
             arg.startsWith('http://') || arg.startsWith('https://')
         );
-        const callback = callbackArg || "http://localhost:3000/oauth2callback";
+        const authPort = process.env.GMAIL_AUTH_PORT || "3000";
+        const callback = callbackArg || `http://localhost:${authPort}/oauth2callback`;
 
         oauth2Client = new OAuth2Client(
             keys.client_id,
@@ -186,7 +187,8 @@ async function loadCredentials() {
 
 async function authenticate(scopes: string[]) {
     const server = http.createServer();
-    server.listen(3000, '127.0.0.1');
+    const authPort = parseInt(process.env.GMAIL_AUTH_PORT || "3000", 10);
+    server.listen(authPort, '127.0.0.1');
 
     // Convert shorthand scope names (e.g., "gmail.readonly") to full Google API URLs
     const scopeUrls = scopeNamesToUrls(scopes);
@@ -204,7 +206,7 @@ async function authenticate(scopes: string[]) {
         server.on('request', async (req, res) => {
             if (!req.url?.startsWith('/oauth2callback')) return;
 
-            const url = new URL(req.url, 'http://localhost:3000');
+            const url = new URL(req.url, `http://localhost:${authPort}`);
             const code = url.searchParams.get('code');
 
             if (!code) {
